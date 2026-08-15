@@ -18,8 +18,13 @@
 
   var GUESS_MIN = 0.02, GUESS_MAX = 0.98;
   var GRAB_PX = 30;        /* a press this close to the line grabs it */
-  var FINE_PX = 5;         /* pointer steps under this are fine control */
-  var FINE_GAIN = 0.45;    /* …and travel at this gain */
+  /* Fine control is about how fast the hand is MOVING, in px per ms —
+     not about how many pixels arrived in one pointermove, which is that
+     speed multiplied by whatever reporting interval the hardware has.
+     See dragGain. 0.3 px/ms is the old 5px-per-step at a 60Hz rate. */
+  var FINE_SPEED = 0.3;    /* px/ms — below this the drag is fine control */
+  var FINE_GAIN = 0.45;    /* …and travels at this gain */
+  var DT_MIN = 4, DT_MAX = 64, DT_FALLBACK = 16.7;
   var ADVANCE_MS = 420;    /* the reveal is protected from double taps */
   var MIN_STAGE_PX = 300;  /* touch parity: keep the aiming window big */
   var POST_COUNT = 6;
@@ -68,7 +73,11 @@
     var sum = 0, v;
     for (var i = 0; i < sceneScores.length; i++) {
       v = sceneScores[i];
-      sum += (typeof v === 'number' && isFinite(v)) ? v : 0;
+      /* Clamped as well as finiteness-checked: a finite number outside
+         0–100 would print as "3e+307" on the HUD just as loudly as a NaN
+         would, and clamping is the identity on every value sceneScore has
+         ever produced. */
+      sum += (typeof v === 'number' && isFinite(v)) ? clamp(v, 0, 100) : 0;
     }
     return sum / sceneScores.length;
   }
@@ -115,15 +124,35 @@
   function postScale(t) { return 1 - t; }
 
   /* Fine-control drag: slow pointer travel moves the line at reduced
-     gain, so a jittering fingertip can still land a single pixel. */
-  function dragGain(dy) { return Math.abs(dy) < FINE_PX ? FINE_GAIN : 1; }
+     gain, so a jittering fingertip can still land a single pixel.
+     SPEED, NOT STEP SIZE. This used to ask "were there fewer than five
+     pixels in this pointermove?", which is not a question about the hand
+     at all — it is that hand's speed times the reporting interval of the
+     hardware. A confident 300px sweep in 300ms arrives as ~17px steps
+     from a 60Hz mouse (full gain: the line follows the finger exactly)
+     and as ~4px steps from a 120Hz phone or a 240Hz mouse (fine gain:
+     the line travels 135px instead of 300 and visibly lags the finger
+     the whole way down). The better the hardware, the less the drill
+     listened. Dividing by the time the step took makes the threshold a
+     real speed, identical on every device.
+     dt is floored — two samples can carry the same timestamp — and
+     capped, so a long pause reads as slow rather than as stopped. */
+  function dragGain(dy, dtMs) {
+    var a = Math.abs(dy);
+    if (!isFinite(a)) return FINE_GAIN;
+    var dt = (typeof dtMs === 'number' && isFinite(dtMs) && dtMs > 0) ? dtMs : DT_FALLBACK;
+    dt = Math.max(DT_MIN, Math.min(DT_MAX, dt));
+    return (a / dt) < FINE_SPEED ? FINE_GAIN : 1;
+  }
 
   /* The scoring window is 0.14*H, so a short canvas turns identical
      perceptual skill into a lower score. Keep the stage tall enough
      on phones — never taller than the viewport can hold. */
   function canvasHeight(w, vh) {
-    /* H divides into every score and every hint — never let it reach 0. */
-    var base = (w > 0) ? Math.max(1, Math.round(w * 0.62)) : 1;
+    /* H divides into every score and every hint — never let it reach 0,
+       and never let it run away either: an infinite height makes every
+       band infinitely wide, which scores every guess a fake 100. */
+    var base = (w > 0 && isFinite(w)) ? Math.max(1, Math.round(w * 0.62)) : 1;
     if (base >= MIN_STAGE_PX || !(vh > 0)) return base;
     return Math.max(base, Math.min(MIN_STAGE_PX, Math.round(vh * 0.52)));
   }
@@ -131,7 +160,11 @@
   /* A miss in pixels is device-dependent; the fraction of the frame
      is the number you can compare across sessions and screens. */
   function missPct(dy, height) {
-    if (!(height > 0)) return 0;
+    /* This number is turned straight into words by pctText, so a
+       non-finite dy would put the literal text "NaN%" in front of a
+       beginner in the one sentence that is supposed to explain their
+       score. Guard the numerator as well as the denominator. */
+    if (!(height > 0) || !isFinite(dy)) return 0;
     return (dy / height) * 100;
   }
 
@@ -194,30 +227,63 @@
     return 'rgb(' + ch(0) + ',' + ch(1) + ',' + ch(2) + ')';
   }
 
+  /* getComputedStyle() on the root forces a style resolve, and this ran at
+     the top of every repaint — once per pointer sample while the line is
+     under the finger — plus a hex parse and a mix for accentText. The
+     tokens only move when the sheet flips theme, so cache them against
+     data-theme; the cache invalidates itself the moment that attribute
+     changes, so onTheme still repaints in the new colours. */
+  var inkCache = null, inkKey = null;
   function inks() {
+    var key = document.documentElement.dataset.theme || '';
+    if (inkCache && inkKey === key) return inkCache;
     var cs = getComputedStyle(document.documentElement);
     var ink = cs.getPropertyValue('--ink').trim();
     var accent = cs.getPropertyValue('--game-accent').trim() || cs.getPropertyValue('--coral').trim();
-    return {
+    inkKey = key;
+    inkCache = {
       ink: ink,
       muted: cs.getPropertyValue('--muted').trim(),
       card: cs.getPropertyValue('--card').trim(),
       accent: accent,
       accentText: ArtDaily.theme() === 'light' ? mixColors(accent, ink, 0.55) : accent,
     };
+    return inkCache;
   }
 
-  /* ---- crisp canvas at any devicePixelRatio; height tracks width ---- */
-  var W = 0, H = 0;
+  /* ---- crisp canvas at any devicePixelRatio; height tracks width ----
+     Returns true only when the sheet really changed size. Assigning
+     canvas.width reallocates and clears the backing store, and `resize`
+     fires on every address-bar nudge on a phone — here the height also
+     tracks the viewport, so both dimensions are compared. */
+  var W = 0, H = 0, fitDpr = 0;
   function fitCanvas() {
     var rect = canvas.getBoundingClientRect();
-    W = Math.max(1, Math.round(rect.width));
-    H = canvasHeight(W, window.innerHeight || 0);
+    var w = Math.max(1, Math.round(rect.width));
+    var h = canvasHeight(w, window.innerHeight || 0);
     var dpr = window.devicePixelRatio || 1;
+    if (w === W && h === H && dpr === fitDpr) return false;
+    W = w;
+    H = h;
+    fitDpr = dpr;
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(H * dpr);
     canvas.style.height = H + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return true;
+  }
+
+  /* ---- one repaint per frame ----
+     A pointermove can arrive two or three times inside one displayed
+     frame, and each used to redraw the whole scene — four boxes with
+     three shaded faces each, six perspective-scaled posts, the figures.
+     Only the last is ever shown. One rAF paints on the same vsync and
+     stops the line feeling heavier than the finger dragging it. */
+  var drawQueued = false;
+  function requestDraw() {
+    if (drawQueued) return;
+    drawQueued = true;
+    requestAnimationFrame(function () { drawQueued = false; draw(); });
   }
 
   /* ============================================================
@@ -809,30 +875,50 @@
      rest off the line); a press further away places it there.
      ============================================================ */
 
-  var dragId = null, dragPointerY = 0, dragLineY = 0;
+  var dragId = null, dragPointerY = 0, dragLineY = 0, dragT = 0;
+
+  /* getBoundingClientRect() is a layout read, and this used to run once
+     per pointer sample — the most expensive thing in the move handler.
+     The sheet cannot move under a live drag without a scroll or a resize,
+     and the hint line above it only re-wraps between scenes, so measure
+     once per gesture and drop the measurement on scroll or resize. */
+  var canvasRect = null;
+  function dropRect() { canvasRect = null; }
+  window.addEventListener('scroll', dropRect, true);
 
   function localY(ev) {
-    return ev.clientY - canvas.getBoundingClientRect().top;
+    var r = canvasRect || (canvasRect = canvas.getBoundingClientRect());
+    return ev.clientY - r.top;
   }
 
   function setGuessPx(y) {
+    /* clamp() is Math.max(lo, Math.min(hi, v)), and both of those
+       propagate NaN — so one non-finite pointer sample would write NaN
+       into guessF, the line would leave the sheet with no gesture that
+       brings it back, and the reveal would then read "off by NaN% of the
+       frame (NaN px)". Drop the sample; the next one is 4ms away. */
+    if (!isFinite(y)) return;
     guessF = clamp(y / H, GUESS_MIN, GUESS_MAX);
     dragLineY = guessF * H;
-    draw();
+    requestDraw();
   }
 
   function beginDrag(ev) {
     var py = localY(ev);
     var lineY = guessF * H;
     dragPointerY = py;
+    dragT = (typeof ev.timeStamp === 'number' && isFinite(ev.timeStamp)) ? ev.timeStamp : 0;
     setGuessPx(Math.abs(py - lineY) > GRAB_PX ? py : lineY);
   }
 
   function dragTo(ev) {
     var py = localY(ev);
     var d = py - dragPointerY;
+    var now = (typeof ev.timeStamp === 'number' && isFinite(ev.timeStamp)) ? ev.timeStamp : dragT + DT_FALLBACK;
+    var dt = now - dragT;
     dragPointerY = py;
-    setGuessPx(dragLineY + d * dragGain(d));
+    dragT = now;
+    setGuessPx(dragLineY + d * dragGain(d, dt));
   }
 
   var lastPenAt = 0;
@@ -841,6 +927,7 @@
     /* palm rejection: a pen always beats a palm that landed first */
     if (ev.pointerType === 'pen') lastPenAt = Date.now();
     else if (ev.pointerType === 'touch' && Date.now() - lastPenAt < 500) return;
+    dropRect();                  /* a fresh gesture re-measures the sheet */
     if (phase === 'aim') {
       if (dragId !== null) return; /* first finger keeps the line */
       dragId = ev.pointerId;
@@ -886,14 +973,15 @@
     }
     if (phase !== 'aim') return;
     var step = (ev.shiftKey ? 8 : 1) / H;
+    /* a held arrow auto-repeats faster than the screen refreshes */
     if (ev.key === 'ArrowUp') {
       ev.preventDefault();
       guessF = clamp(guessF - step, GUESS_MIN, GUESS_MAX);
-      draw();
+      requestDraw();
     } else if (ev.key === 'ArrowDown') {
       ev.preventDefault();
       guessF = clamp(guessF + step, GUESS_MIN, GUESS_MAX);
-      draw();
+      requestDraw();
     }
   });
 
@@ -948,9 +1036,13 @@
 
   ArtDaily.onTheme(draw);
   window.addEventListener('resize', function () {
-    fitCanvas();
-    /* a phone's address bar collapsing mid-drag fires this: re-anchor the
-       drag to the new frame height or the next move warps the line. */
+    dropRect();
+    /* fitCanvas is a no-op when nothing really moved, so an address bar
+       nudge that changes neither dimension no longer reallocates the
+       backing store nor rewrites the hint under the player's eyes. When
+       it DID change, re-anchor the drag to the new frame height or the
+       next move warps the line. */
+    if (!fitCanvas()) { draw(); return; }
     dragLineY = guessF * H;
     refreshHint(); /* the px miss is read off the new frame height */
     draw();
