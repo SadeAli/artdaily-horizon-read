@@ -380,6 +380,7 @@
     sceneIdx = 0;
     sceneScores = [];
     reported = false;
+    dragId = null;  /* a stuck pointer must never outlive a round */
     scene = makeScene(0);
     guessF = startGuess(scene.eye);
     phase = 'aim';
@@ -448,6 +449,7 @@
     if (phase !== 'reveal' || !canAdvance()) return;
     clearTimeout(advanceTimer);
     sceneIdx += 1;
+    dragId = null;  /* …nor one scene */
     scene = makeScene(sceneIdx);
     guessF = startGuess(scene.eye);
     phase = 'aim';
@@ -846,6 +848,15 @@
   }
   canvas.addEventListener('pointerup', endDrag);
   canvas.addEventListener('pointercancel', endDrag);
+  /* A pointerup the canvas never sees used to leave the line
+     undraggable for the rest of the session, because pointerdown
+     returns early while one is in flight — a release off-window, or iOS
+     dropping the capture with lostpointercapture and no pointerup. On a
+     phone there is no keyboard fallback, so every remaining scene would
+     be scored against a line the player cannot move. */
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('lostpointercapture', endDrag);
 
   canvas.addEventListener('keydown', function (ev) {
     if (ev.key === 'Enter' || ev.key === ' ') {
@@ -887,7 +898,28 @@
   }
 
   /* ---- chrome wiring ---- */
-  document.getElementById('btnRound').addEventListener('click', newRound);
+  /* "new round" arms first when it would throw away a live round — a
+     second press within the window confirms, otherwise it snaps back.
+     An unfinished round is never reported, so a mis-tap here used to
+     bin every scene locked so far without a word. (The five sibling
+     drills all guard this button; this one did not.) */
+  var btnRound = document.getElementById('btnRound');
+  var roundArmTimer = null, roundArmed = false;
+  function disarmRoundBtn() {
+    roundArmed = false;
+    clearTimeout(roundArmTimer);
+    btnRound.innerHTML = 'new round <span aria-hidden="true">↻</span>';
+  }
+  btnRound.addEventListener('click', function () {
+    if (sceneScores.length && phase !== 'done' && !roundArmed) {
+      roundArmed = true;
+      btnRound.textContent = 'discard round?';
+      roundArmTimer = setTimeout(disarmRoundBtn, 2600);
+      return;
+    }
+    disarmRoundBtn();
+    newRound();
+  });
 
   var btnHow = document.getElementById('btnHow');
   var howTo = document.getElementById('howTo');
