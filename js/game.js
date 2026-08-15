@@ -4,15 +4,25 @@
    and undersides only above it, receding post rows converge to
    it, figures stand with their heads on it. The player drags a
    line to the hidden eye level and locks it in; the reveal draws
-   the true line plus the cue lines extended to the vanishing
-   point. Scenes are stored in normalized (0..1) coordinates so a
-   resize never changes the ground truth.
+   the true line, the cue lines extended to the vanishing point,
+   and a ring around the scene's decisive cue. Scenes are stored
+   in normalized (0..1) coordinates so a resize never changes the
+   ground truth, and the fence row is projected with the real
+   pinhole formula rather than an arithmetic fake.
    ============================================================ */
 (function () {
   'use strict';
 
   var SLUG = 'horizon-read';
   var SCENES_PER_ROUND = 5;
+
+  var GUESS_MIN = 0.02, GUESS_MAX = 0.98;
+  var GRAB_PX = 30;        /* a press this close to the line grabs it */
+  var FINE_PX = 5;         /* pointer steps under this are fine control */
+  var FINE_GAIN = 0.45;    /* …and travel at this gain */
+  var ADVANCE_MS = 420;    /* the reveal is protected from double taps */
+  var MIN_STAGE_PX = 300;  /* touch parity: keep the aiming window big */
+  var POST_COUNT = 6;
 
   var canvas = document.getElementById('gameCanvas');
   var ctx = canvas.getContext('2d');
@@ -22,6 +32,7 @@
   var hudScore = document.getElementById('hudScore');
   var hudBest = document.getElementById('hudBest');
   var btnLock = document.getElementById('btnLock');
+  var pipList = document.getElementById('scenePips');
 
   ArtDaily.init({ slug: SLUG });
 
@@ -63,6 +74,87 @@
     if (topY >= eyeY) return 'top';
     if (botY <= eyeY) return 'bottom';
     return 'none';
+  }
+
+  /* Real pinhole projection of an evenly spaced post row. Posts sit
+     every `step` units along the ground line, the nearest one
+     `depth` units in front of the camera; the camera scales each by
+     depth / (depth + k*step), so post k lands
+        t_k = k*step / (k*step + depth)
+     of the way from the near post to the vanishing point. Arithmetic
+     spacing (the old [0, .18, .34, …]) is not any real fence — an
+     artist running the diagonal/halving check would catch it. */
+  function postT(k, step, depth) {
+    var z = k * step;
+    var den = z + depth;
+    /* a zero/negative-depth camera is not a scene — collapse the row
+       onto the near post rather than emitting NaN into the drawing. */
+    if (!(den > 0)) return 0;
+    return z / den;
+  }
+
+  function postTs(count, step, depth) {
+    var ts = [];
+    for (var k = 0; k < count; k++) ts.push(postT(k, step, depth));
+    return ts;
+  }
+
+  /* Perspective scale of that post — its apparent height and width. */
+  function postScale(t) { return 1 - t; }
+
+  /* Fine-control drag: slow pointer travel moves the line at reduced
+     gain, so a jittering fingertip can still land a single pixel. */
+  function dragGain(dy) { return Math.abs(dy) < FINE_PX ? FINE_GAIN : 1; }
+
+  /* The scoring window is 0.14*H, so a short canvas turns identical
+     perceptual skill into a lower score. Keep the stage tall enough
+     on phones — never taller than the viewport can hold. */
+  function canvasHeight(w, vh) {
+    /* H divides into every score and every hint — never let it reach 0. */
+    var base = (w > 0) ? Math.max(1, Math.round(w * 0.62)) : 1;
+    if (base >= MIN_STAGE_PX || !(vh > 0)) return base;
+    return Math.max(base, Math.min(MIN_STAGE_PX, Math.round(vh * 0.52)));
+  }
+
+  /* A miss in pixels is device-dependent; the fraction of the frame
+     is the number you can compare across sessions and screens. */
+  function missPct(dy, height) {
+    if (!(height > 0)) return 0;
+    return (dy / height) * 100;
+  }
+
+  function pctText(dy, height) {
+    var p = missPct(dy, height);
+    return (p < 9.95 ? p.toFixed(1) : String(Math.round(p))) + '%';
+  }
+
+  /* The tightest box the line cuts through — it brackets the answer
+     from both sides, so it is the cue worth naming. */
+  function straddleIndex(boxes, eye) {
+    var best = -1, bestSpan = Infinity;
+    for (var i = 0; i < boxes.length; i++) {
+      if (boxFaces(boxes[i].top, boxes[i].bot, eye) !== 'none') continue;
+      var span = boxes[i].bot - boxes[i].top;
+      if (span < bestSpan) { bestSpan = span; best = i; }
+    }
+    return best;
+  }
+
+  /* Which single cue a beginner should have pulled on — ordered by how
+     tightly each one pins the line, not by how loud it looks. Heads and
+     the fence's vanishing point give an exact height; a straddling box
+     only brackets the answer inside its span; face-flips across the
+     whole scene are the loosest read of all. Ordering straddle above
+     posts would make the fence unreachable — every scene that has posts
+     also carries a straddler. */
+  function decisiveCue(sc) {
+    if (sc.figures && sc.figures.length) {
+      return { kind: 'figures', label: 'same-height heads sit on the line' };
+    }
+    if (sc.posts) return { kind: 'posts', label: 'the receding row aims straight here' };
+    var i = straddleIndex(sc.boxes, sc.eye);
+    if (i >= 0) return { kind: 'straddle', index: i, label: 'no top, no underside — the line cuts it' };
+    return { kind: 'faces', label: 'tops below the line, undersides above' };
   }
 
   /* ---- theme-aware inks (re-read on every repaint) ---- */
@@ -108,7 +200,7 @@
   function fitCanvas() {
     var rect = canvas.getBoundingClientRect();
     W = Math.max(1, Math.round(rect.width));
-    H = Math.round(W * 0.62);
+    H = canvasHeight(W, window.innerHeight || 0);
     var dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(H * dpr);
@@ -128,6 +220,8 @@
     { posts: false, boxKinds: ['above', 'below', 'span'], figures: 0 },
     { posts: false, boxKinds: ['above', 'below'], figures: 0 },
   ];
+
+  function planFor(idx) { return SCENE_PLANS[clamp(idx, 0, SCENE_PLANS.length - 1)]; }
 
   function rand(lo, hi) { return lo + Math.random() * (hi - lo); }
 
@@ -161,7 +255,7 @@
   }
 
   function makeScene(idx) {
-    var plan = SCENE_PLANS[clamp(idx, 0, SCENE_PLANS.length - 1)];
+    var plan = planFor(idx);
     var eye = rand(0.3, 0.7);
     var vpx = rand(0.32, 0.68);
 
@@ -178,11 +272,15 @@
     var posts = null;
     if (plan.posts) {
       var baseY = eye + rand(0.2, Math.min(0.32, 0.93 - eye));
+      var step = rand(0.55, 0.9);   /* ground units between posts */
+      var depth = rand(1.3, 2.1);   /* ground units to the near post */
       posts = {
         x0: vpx < 0.5 ? rand(0.84, 0.92) : rand(0.08, 0.16),
         baseY: baseY,
         h: (baseY - eye) * rand(0.55, 0.8), /* fence-height: tops stay under eye level */
-        ts: [0, 0.18, 0.34, 0.48, 0.6, 0.7],
+        step: step,
+        depth: depth,
+        ts: postTs(POST_COUNT, step, depth),
       };
     }
 
@@ -197,26 +295,84 @@
     return { eye: eye, vpx: vpx, boxes: boxes, posts: posts, figures: figures };
   }
 
-  /* Start the guess line well away from the answer, on a side that
-     does not leak which half the eye level is in. */
+  /* Start the guess line well away from the answer. Both ends sit ≥0.2
+     from every eye level the generator can produce (0.3..0.7), so which
+     end you get carries no information. A mid-canvas start would leak:
+     0.5 can only clear a "far enough from the answer" filter when the
+     eye is outside 0.37..0.63, quietly ruling out most of the range. */
   function startGuess(eye) {
-    var candidates = [0.1, 0.5, 0.9];
-    var ok = [];
-    for (var i = 0; i < candidates.length; i++) {
-      if (Math.abs(candidates[i] - eye) > 0.13) ok.push(candidates[i]);
-    }
-    return ok[Math.floor(Math.random() * ok.length)];
+    var pick = Math.random() < 0.5 ? 0.1 : 0.9;
+    /* if the eye range is ever widened, keep the start off the answer */
+    return Math.abs(pick - eye) > 0.13 ? pick : (eye > 0.5 ? 0.1 : 0.9);
   }
 
   /* ---- round state ---- */
   var round = 0, sceneIdx = 0, scene = null, sceneScores = [], guessF = 0.5;
   var phase = 'idle'; /* 'aim' | 'reveal' | 'done' */
-  var lastDy = 0, lastScore = 0;
+  var lastScore = 0, reported = false;
+  var advanceReadyAt = 0, advanceTimer = null;
+
+  /* The reveal is the lesson — a stray second tap must not skip it,
+     so every advance path (canvas, button, key) waits ADVANCE_MS. */
+  function armAdvance() {
+    advanceReadyAt = Date.now() + ADVANCE_MS;
+    /* disabling a focused button blurs it — hand focus back on re-enable
+       so a keyboard player never loses their place mid-round. */
+    var hadFocus = document.activeElement === btnLock;
+    btnLock.disabled = true;
+    clearTimeout(advanceTimer);
+    advanceTimer = setTimeout(function () {
+      if (phase !== 'reveal' && phase !== 'done') return;
+      btnLock.disabled = false;
+      if (hadFocus && btnLock.focus) btnLock.focus();
+    }, ADVANCE_MS);
+  }
+
+  function canAdvance() { return Date.now() >= advanceReadyAt; }
+
+  function currentMiss() {
+    return scene ? pixelError(guessF * H, scene.eye * H) : 0;
+  }
+
+  function buildPips() {
+    pipList.innerHTML = '';
+    for (var i = 0; i < SCENES_PER_ROUND; i++) {
+      var li = document.createElement('li');
+      li.className = 'pip';
+      var n = document.createElement('span');
+      n.className = 'pip-n';
+      n.textContent = String(i + 1);
+      var v = document.createElement('span');
+      v.className = 'pip-v';
+      v.textContent = '–';
+      li.appendChild(n);
+      li.appendChild(v);
+      pipList.appendChild(li);
+    }
+  }
+
+  function paintPips() {
+    var items = pipList.children;
+    for (var i = 0; i < items.length; i++) {
+      var scored = i < sceneScores.length;
+      var val = scored ? String(Math.round(sceneScores[i])) : '–';
+      items[i].className = 'pip' +
+        (scored ? ' is-scored' : '') +
+        (!scored && i === sceneIdx && phase !== 'done' ? ' is-current' : '');
+      items[i].lastChild.textContent = val;
+      items[i].setAttribute('aria-label', scored
+        ? 'scene ' + (i + 1) + ' scored ' + val + ' of 100'
+        : 'scene ' + (i + 1) + ' not played yet');
+    }
+  }
 
   function newRound() {
+    clearTimeout(advanceTimer);
+    advanceReadyAt = 0;
     round += 1;
     sceneIdx = 0;
     sceneScores = [];
+    reported = false;
     scene = makeScene(0);
     guessF = startGuess(scene.eye);
     phase = 'aim';
@@ -224,52 +380,83 @@
     btnLock.textContent = 'lock it in';
     hudRound.textContent = String(round);
     hudScore.textContent = '–';
-    hint.textContent = aimHint();
+    paintPips();
+    refreshHint();
     draw();
+  }
+
+  /* One short cue per scene, so the drill teaches while it is played
+     instead of hiding the rules inside "how to play". Read off the same
+     decisiveCue the reveal will ring, so the thread you were pointed at
+     and the thread the reveal circles are never two different ones.
+     None of these name a position, so the answer stays hidden. */
+  var CUE_TIPS = {
+    figures: 'the walkers are all your height — their heads ride it.',
+    straddle: 'one box shows you neither its top nor its underside.',
+    posts: 'the fence row aims straight at it.',
+    faces: 'box tops show only below it, undersides only above.',
+  };
+
+  function cueTip() {
+    return scene ? CUE_TIPS[decisiveCue(scene).kind] : '';
   }
 
   function aimHint() {
     return 'scene ' + (sceneIdx + 1) + ' of ' + SCENES_PER_ROUND +
-      ' — drag the line to the hidden eye level, then lock it in.';
+      ' — drag the line up or down onto the hidden eye level, then lock it in. ' + cueTip();
+  }
+
+  function missPhrase() {
+    var dy = currentMiss();
+    return 'off by ' + dy + 'px (' + pctText(dy, H) + ' of frame) — scored ' + lastScore + '.';
+  }
+
+  function refreshHint() {
+    if (phase === 'aim') {
+      hint.textContent = aimHint();
+    } else if (phase === 'reveal') {
+      hint.textContent = missPhrase() + ' tap the canvas or press “next scene” for scene ' + (sceneIdx + 2) + '.';
+    } else if (phase === 'done') {
+      hint.textContent = missPhrase() + ' round done — tap the canvas or press “new round” to go again.';
+    }
   }
 
   function lockIn() {
     if (phase !== 'aim') return;
     var s = sceneScore(guessF * H, scene.eye * H, H);
-    lastDy = pixelError(guessF * H, scene.eye * H);
     lastScore = Math.round(s);
     sceneScores.push(s);
-    if (sceneIdx + 1 < SCENES_PER_ROUND) {
-      phase = 'reveal';
-      btnLock.textContent = 'next scene →';
-      hint.textContent = 'off by ' + lastDy + 'px — ' + lastScore +
-        '. tap the canvas for scene ' + (sceneIdx + 2) + '.';
-      draw();
-      return;
-    }
-    phase = 'done';
-    btnLock.disabled = true;
+    phase = (sceneIdx + 1 < SCENES_PER_ROUND) ? 'reveal' : 'done';
+    btnLock.textContent = phase === 'reveal' ? 'next scene →' : 'new round ↻';
+    armAdvance();
+    paintPips();
+    refreshHint();
     draw();
-    finishRound();
+    if (phase === 'done') finishRound();
   }
 
   function nextScene() {
-    if (phase !== 'reveal') return;
+    if (phase !== 'reveal' || !canAdvance()) return;
+    clearTimeout(advanceTimer);
     sceneIdx += 1;
     scene = makeScene(sceneIdx);
     guessF = startGuess(scene.eye);
     phase = 'aim';
+    btnLock.disabled = false;
     btnLock.textContent = 'lock it in';
-    hint.textContent = aimHint();
+    paintPips();
+    refreshHint();
     draw();
   }
 
+  /* Exactly one report per finished round, on every path. */
   function finishRound() {
+    if (reported) return;
+    reported = true;
     var res = ArtDaily.report(roundScore(sceneScores));
     hudScore.textContent = String(res.score);
     hudBest.textContent = res.best === null ? '–' : String(res.best);
-    hint.textContent = 'off by ' + lastDy + 'px — ' + lastScore +
-      '. round done — press “new round” to go again.';
+    refreshHint();
     showToast((res.isNewBest ? 'new best! ' : 'score ') + res.score + ' / 100', res.isNewBest);
   }
 
@@ -278,7 +465,9 @@
      ============================================================ */
 
   var MONO_FONT = '600 12px Menlo, Consolas, monospace';
-  var HAND_FONT = '700 21px Caveat, "Segoe Print", cursive';
+  var CUE_PX = 17;
+  function handFont(px) { return '700 ' + px + 'px Caveat, "Segoe Print", cursive'; }
+  var HAND_FONT = handFont(21);
 
   function draw() {
     var c = inks();
@@ -302,6 +491,17 @@
     ctx.closePath();
   }
 
+  /* A front-face corner pushed back along its ray to the VP — the
+     exact projection of a fronto-parallel box's back corner. */
+  function backPoint(p, vp, t) {
+    return [lerp(p[0], vp[0], t), lerp(p[1], vp[1], t)];
+  }
+
+  function corners(b) {
+    var x0 = b.x0 * W, x1 = b.x1 * W, ty = b.top * H, by = b.bot * H;
+    return [[x0, ty], [x1, ty], [x1, by], [x0, by]];
+  }
+
   function drawScene(c) {
     var vp = [scene.vpx * W, scene.eye * H];
     var i;
@@ -311,11 +511,11 @@
   }
 
   function drawBox(c, b, vp) {
-    var x0 = b.x0 * W, x1 = b.x1 * W, ty = b.top * H, by = b.bot * H;
-    function back(p) { return [lerp(p[0], vp[0], b.t), lerp(p[1], vp[1], b.t)]; }
-    var A = [x0, ty], B = [x1, ty], C = [x1, by], D = [x0, by];
-    var A2 = back(A), B2 = back(B), C2 = back(C), D2 = back(D);
-    var vis = boxFaces(ty, by, vp[1]);
+    var p = corners(b);
+    var A = p[0], B = p[1], C = p[2], D = p[3];
+    var A2 = backPoint(A, vp, b.t), B2 = backPoint(B, vp, b.t);
+    var C2 = backPoint(C, vp, b.t), D2 = backPoint(D, vp, b.t);
+    var vis = boxFaces(A[1], D[1], vp[1]);
 
     ctx.lineJoin = 'round';
     ctx.lineWidth = 1.6;
@@ -332,8 +532,8 @@
     }
 
     /* side face first (it sits behind the front face) */
-    if (x1 < vp[0]) face(B, C, C2, B2, 0.1);
-    else if (x0 > vp[0]) face(A, D, D2, A2, 0.1);
+    if (B[0] < vp[0]) face(B, C, C2, B2, 0.1);
+    else if (A[0] > vp[0]) face(A, D, D2, A2, 0.1);
     /* top only below eye level, underside only above — the drill's truth */
     if (vis === 'top') face(A, B, B2, A2, 0.15);
     if (vis === 'bottom') face(D, C, C2, D2, 0.2);
@@ -349,16 +549,17 @@
     ctx.globalAlpha = 0.85;
     for (var i = 0; i < p.ts.length; i++) {
       var t = p.ts[i];
+      var s = postScale(t);                    /* real perspective scale */
       var x = lerp(bx0, vp[0], t);
       var yb = lerp(by0, vp[1], t);
       var yt = lerp(ty0, vp[1], t);
-      ctx.lineWidth = lerp(3.5, 1.2, t);
+      ctx.lineWidth = Math.max(1, 3.6 * s);    /* thickness falls off with depth */
       ctx.beginPath();
       ctx.moveTo(x, yb);
       ctx.lineTo(x, yt);
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(x, yt, lerp(2.6, 1, t), 0, Math.PI * 2);
+      ctx.arc(x, yt, Math.max(0.9, 2.8 * s), 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
@@ -406,24 +607,24 @@
     ctx.setLineDash([]);
     if (dim) return;
     /* grab knob (visual only — the whole canvas is the handle) */
-    var hx = W - 26;
+    var hx = W - 28;
     ctx.fillStyle = c.card;
     ctx.strokeStyle = c.ink;
     ctx.beginPath();
-    ctx.arc(hx, y, 11, 0, Math.PI * 2);
+    ctx.arc(hx, y, 13, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = c.ink;
     ctx.beginPath();
-    ctx.moveTo(hx, y - 7);
-    ctx.lineTo(hx - 4, y - 2.5);
-    ctx.lineTo(hx + 4, y - 2.5);
+    ctx.moveTo(hx, y - 8);
+    ctx.lineTo(hx - 4.5, y - 3);
+    ctx.lineTo(hx + 4.5, y - 3);
     ctx.closePath();
     ctx.fill();
     ctx.beginPath();
-    ctx.moveTo(hx, y + 7);
-    ctx.lineTo(hx - 4, y + 2.5);
-    ctx.lineTo(hx + 4, y + 2.5);
+    ctx.moveTo(hx, y + 8);
+    ctx.lineTo(hx - 4.5, y + 3);
+    ctx.lineTo(hx + 4.5, y + 3);
     ctx.closePath();
     ctx.fill();
   }
@@ -470,10 +671,13 @@
     ctx.textAlign = 'left';
     ctx.fillText('eye level', 10, eyeY < 34 ? eyeY + 26 : eyeY - 10);
 
+    drawCueHighlight(c, vp);
+
     /* the miss, bracketed */
     var gY = guessF * H;
-    if (lastDy > 0) {
-      var bx = W - 52;
+    var dy = currentMiss();
+    if (dy > 0) {
+      var bx = W - 56;
       ctx.strokeStyle = c.muted;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
@@ -484,9 +688,80 @@
       ctx.font = MONO_FONT;
       ctx.textAlign = 'right';
       var midY = (gY + eyeY) / 2;
-      ctx.fillText(lastDy + 'px', bx - 6, clamp(midY + 4, 12, H - 6));
+      ctx.fillText(dy + 'px · ' + pctText(dy, H), bx - 6, clamp(midY + 4, 12, H - 6));
     }
     ctx.textAlign = 'left';
+  }
+
+  /* Ring the one cue that settled this scene, so the reveal teaches
+     which thread to pull instead of showing a correct spiderweb. */
+  function drawCueHighlight(c, vp) {
+    var cue = decisiveCue(scene);
+    var eyeY = scene.eye * H;
+    var lx = W / 2, i, p, b, f, h, r, vis;
+
+    ctx.strokeStyle = c.accent;
+    ctx.lineWidth = 2.2;
+    ctx.lineJoin = 'round';
+
+    if (cue.kind === 'figures') {
+      for (i = 0; i < scene.figures.length; i++) {
+        f = scene.figures[i];
+        h = f.feetY * H - eyeY;
+        r = Math.max(5, h * 0.1);
+        ctx.beginPath();
+        ctx.arc(f.x * W, eyeY + r, r + 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      lx = scene.figures[0].x * W;
+    } else if (cue.kind === 'straddle') {
+      b = scene.boxes[cue.index];
+      ctx.strokeRect(b.x0 * W, b.top * H, (b.x1 - b.x0) * W, (b.bot - b.top) * H);
+      lx = (b.x0 + b.x1) / 2 * W;
+    } else if (cue.kind === 'posts') {
+      ctx.beginPath();
+      ctx.arc(vp[0], vp[1], 11, 0, Math.PI * 2);
+      ctx.stroke();
+      lx = vp[0];
+    } else {
+      for (i = 0; i < scene.boxes.length; i++) {
+        b = scene.boxes[i];
+        p = corners(b);
+        vis = boxFaces(p[0][1], p[3][1], eyeY);
+        if (vis === 'top') {
+          quad(p[0], p[1], backPoint(p[1], vp, b.t), backPoint(p[0], vp, b.t));
+          ctx.stroke();
+        } else if (vis === 'bottom') {
+          quad(p[3], p[2], backPoint(p[2], vp, b.t), backPoint(p[3], vp, b.t));
+          ctx.stroke();
+        }
+      }
+    }
+
+    ctx.fillStyle = c.accentText;
+    ctx.font = cueFont(cue.label, W - 16);
+    ctx.textAlign = 'center';
+    var half = ctx.measureText(cue.label).width / 2 + 8;
+    /* sit on the far side of the true line from the guess, so the label
+       never lands on the miss bracket or the "eye level" tag */
+    var ly = guessF * H < eyeY ? eyeY + 30 : eyeY - 30;
+    if (ly > H - 8) ly = eyeY - 30;
+    if (ly < 18) ly = eyeY + 30;
+    ctx.fillText(cue.label, clamp(lx, Math.min(half, W / 2), Math.max(W - half, W / 2)), clamp(ly, 18, H - 8));
+    ctx.textAlign = 'left';
+  }
+
+  /* Shrink the cue label until it fits a narrow phone canvas — a
+     clipped sentence teaches nothing. */
+  function cueFont(label, maxW) {
+    var px = CUE_PX;
+    ctx.font = handFont(px);
+    var w = ctx.measureText(label).width;
+    if (w > maxW && w > 0) {
+      px = clamp(Math.floor(px * maxW / w), 12, CUE_PX);
+      ctx.font = handFont(px);
+    }
+    return ctx.font;
   }
 
   function cueLine(x, y, vp) {
@@ -497,15 +772,35 @@
   }
 
   /* ============================================================
-     Input — pointer-first, whole canvas drags the line
+     Input — pointer-first, whole canvas drags the line.
+     Grabbing near the line moves it by delta (the fingertip can
+     rest off the line); a press further away places it there.
      ============================================================ */
 
-  var dragId = null;
+  var dragId = null, dragPointerY = 0, dragLineY = 0;
 
-  function moveGuessTo(ev) {
-    var rect = canvas.getBoundingClientRect();
-    guessF = clamp((ev.clientY - rect.top) / H, 0.02, 0.98);
+  function localY(ev) {
+    return ev.clientY - canvas.getBoundingClientRect().top;
+  }
+
+  function setGuessPx(y) {
+    guessF = clamp(y / H, GUESS_MIN, GUESS_MAX);
+    dragLineY = guessF * H;
     draw();
+  }
+
+  function beginDrag(ev) {
+    var py = localY(ev);
+    var lineY = guessF * H;
+    dragPointerY = py;
+    setGuessPx(Math.abs(py - lineY) > GRAB_PX ? py : lineY);
+  }
+
+  function dragTo(ev) {
+    var py = localY(ev);
+    var d = py - dragPointerY;
+    dragPointerY = py;
+    setGuessPx(dragLineY + d * dragGain(d));
   }
 
   canvas.addEventListener('pointerdown', function (ev) {
@@ -514,16 +809,20 @@
       if (dragId !== null) return; /* first finger keeps the line */
       dragId = ev.pointerId;
       try { canvas.setPointerCapture(dragId); } catch (e) {}
-      moveGuessTo(ev);
+      beginDrag(ev);
     } else if (phase === 'reveal') {
       nextScene();
+    } else if (phase === 'done' && canAdvance()) {
+      /* the canvas advanced the last four scenes — it must not go dead
+         on the fifth. Same ADVANCE_MS guard, so the reveal still lands. */
+      newRound();
     }
   });
 
   canvas.addEventListener('pointermove', function (ev) {
     if (phase !== 'aim' || dragId === null || ev.pointerId !== dragId) return;
     ev.preventDefault();
-    moveGuessTo(ev);
+    dragTo(ev);
   });
 
   function endDrag(ev) {
@@ -537,17 +836,18 @@
       ev.preventDefault();
       if (phase === 'aim') lockIn();
       else if (phase === 'reveal') nextScene();
+      else if (phase === 'done' && canAdvance()) newRound();
       return;
     }
     if (phase !== 'aim') return;
     var step = (ev.shiftKey ? 8 : 1) / H;
     if (ev.key === 'ArrowUp') {
       ev.preventDefault();
-      guessF = clamp(guessF - step, 0.02, 0.98);
+      guessF = clamp(guessF - step, GUESS_MIN, GUESS_MAX);
       draw();
     } else if (ev.key === 'ArrowDown') {
       ev.preventDefault();
-      guessF = clamp(guessF + step, 0.02, 0.98);
+      guessF = clamp(guessF + step, GUESS_MIN, GUESS_MAX);
       draw();
     }
   });
@@ -555,6 +855,7 @@
   btnLock.addEventListener('click', function () {
     if (phase === 'aim') lockIn();
     else if (phase === 'reveal') nextScene();
+    else if (phase === 'done' && canAdvance()) newRound();
   });
 
   var toastTimer = null;
@@ -580,10 +881,18 @@
   });
 
   ArtDaily.onTheme(draw);
-  window.addEventListener('resize', function () { fitCanvas(); draw(); });
+  window.addEventListener('resize', function () {
+    fitCanvas();
+    /* a phone's address bar collapsing mid-drag fires this: re-anchor the
+       drag to the new frame height or the next move warps the line. */
+    dragLineY = guessF * H;
+    refreshHint(); /* the px miss is read off the new frame height */
+    draw();
+  });
 
   /* ---- boot ---- */
   fitCanvas();
+  buildPips();
   var best = ArtDaily.best();
   hudBest.textContent = best === null ? '–' : String(best);
   newRound();

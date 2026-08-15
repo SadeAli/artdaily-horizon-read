@@ -387,10 +387,61 @@ a { color: inherit; }
    game-specific styles below this line
    ============================================================ */
 
-/* lock-it-in sits right under the canvas — the drill's main verb,
-   big enough for thumbs (≥44px tall). */
+/* lock-it-in sits right under the canvas — the drill's main verb.
+   Every button here is a thumb target: ≥44px tall, label centred. */
 .stage-actions { display: flex; justify-content: center; margin-top: 10px; }
-.stage-actions .btn { min-width: 200px; min-height: 44px; }
+.stage-actions .btn,
+.game-controls .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+}
+.stage-actions .btn { min-width: 200px; }
+
+/* Five chips — the round's running scorecard, so progress is visible
+   before the last scene lands. */
+.pips {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.pip {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 3px 2px 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px 9px 4px 8px;
+  background: color-mix(in srgb, var(--line) 10%, var(--card));
+  text-align: center;
+  line-height: 1.25;
+}
+.pip-n {
+  display: block;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  /* muted alone lands at 4.4:1 on the accent-tinted scored chip — ink
+     it up so this small label clears AA on both sheets. */
+  color: color-mix(in srgb, var(--muted) 55%, var(--ink));
+}
+.pip-v {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 900;
+  color: var(--ink);
+}
+.pip.is-scored {
+  background: color-mix(in srgb, var(--game-accent) 16%, var(--card));
+  border-color: color-mix(in srgb, var(--game-accent) 45%, var(--line));
+}
+.pip.is-current {
+  border-color: color-mix(in srgb, var(--game-accent) 70%, var(--line));
+  box-shadow: 0 2px 0 var(--shadow);
+}
 
 /* dragging happens on the canvas, so hint at it */
 .game-canvas { cursor: ns-resize; }

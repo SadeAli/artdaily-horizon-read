@@ -49,8 +49,9 @@
       <p class="hint" id="hint">Loading…</p>
 
       <div class="game-stage">
-        <canvas class="game-canvas" id="gameCanvas" tabindex="0" role="img" aria-label="Horizon Read drill area"></canvas>
+        <canvas class="game-canvas" id="gameCanvas" tabindex="0" role="img" aria-label="Horizon Read drill area — drag the line onto the hidden eye level; arrows nudge it (shift = 8px), Enter locks it in"></canvas>
         <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+        <ol class="pips" id="scenePips" aria-label="scene scores this round"></ol>
         <div class="stage-actions">
           <button class="btn btn-primary" id="btnLock">lock it in</button>
         </div>
@@ -62,8 +63,10 @@
       </div>
       <div class="howto" id="howTo" hidden>
         <p class="howto-cmd" aria-hidden="true"><span class="prompt">$</span> man horizon-read</p>
-        <p>The horizon is hidden. Drag the line to the camera's eye level and lock it in — five scenes per round, closer guesses score higher.</p>
-        <p>Read the cues: box tops show only below eye level, undersides only above, and receding rows aim straight at it.</p>
+        <p>The horizon is hidden. Drag the line to the camera's eye level and lock it in — five scenes per round, closer guesses score higher. The five chips under the canvas keep each scene's score.</p>
+        <p>Read the cues: box tops show only below eye level, undersides only above, the walkers are all your height so their heads ride the line, and receding rows aim straight at it.</p>
+        <p>Grab the line and it moves with your finger — slow moves travel at half speed, so you can place it to the pixel. A press far from the line drops it there. Keys: ↑ ↓ nudge (hold shift for 8px), Enter locks in and then advances.</p>
+        <p>The reveal draws the true line, every receding edge extended to the vanishing point, a ring around the cue that settled the scene, and your miss in pixels and per cent of the frame. Tap the canvas or press the button to move on — either way the reveal holds for a beat first, so a stray double tap can't skip it.</p>
         <p>Studio tip: things at your eye level show you neither their top nor their underside — hunt for that flip.</p>
       </div>
 
