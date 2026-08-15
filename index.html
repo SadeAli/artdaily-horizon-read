@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Horizon Read — Art Daily</title>
+<meta name="description" content="estimate the camera's eye level — a daily art drill from artdaily.sadeali.com">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Horizon Read">
+<meta property="og:description" content="estimate the camera's eye level — a daily art drill">
+<meta property="og:site_name" content="Art Daily · SadeAli">
+<meta property="og:url" content="https://sadeali.github.io/artdaily-horizon-read/">
+<link rel="canonical" href="https://sadeali.github.io/artdaily-horizon-read/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Horizon Read">
+<meta name="twitter:description" content="estimate the camera's eye level — a daily art drill">
+<link rel="icon" href="data:image/svg+xml,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'&gt;&lt;text y='.9em' font-size='90'&gt;🌅&lt;/text&gt;&lt;/svg&gt;">
+<link rel="stylesheet" href="css/style.css">
+<script>
+(function(){var q=null,t=null;try{q=new URLSearchParams(location.search).get('theme');}catch(e){}try{t=localStorage.getItem('sadeali-theme');}catch(e){}var v=(q==='light'||q==='dark')?q:t;document.documentElement.dataset.theme=(v==='dark')?'dark':'light';})();
+</script>
+</head>
+<body>
+<div class="topbar">
+  <a class="backlink" href="https://artdaily.sadeali.com/">← artdaily</a>
+  <div class="topbar-spacer"></div>
+  <button class="iconbtn" id="themeToggle" aria-label="Toggle light or dark theme" title="Toggle theme" hidden>
+    <svg class="ic-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
+    <svg class="ic-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </button>
+</div>
+
+<main class="stage game-wide">
+  <div class="term">
+    <div class="term-bar" aria-hidden="true"><i class="dot d1"></i><i class="dot d2"></i><i class="dot d3"></i><span class="term-title">~/artdaily/horizon-read</span></div>
+    <div class="term-body game-body">
+      <div class="game-hud">
+        <div class="game-id">
+          <h1 class="game-name"><span class="game-emoji" aria-hidden="true">🌅</span> Horizon Read</h1>
+          <p class="game-tagline">estimate the camera's eye level</p>
+        </div>
+        <dl class="hud-stats">
+          <div class="hud-stat"><dt>round</dt><dd id="hudRound">–</dd></div>
+          <div class="hud-stat"><dt>score</dt><dd id="hudScore">–</dd></div>
+          <div class="hud-stat"><dt>best</dt><dd id="hudBest">–</dd></div>
+        </dl>
+      </div>
+
+      <p class="hint" id="hint">Loading…</p>
+
+      <div class="game-stage">
+        <canvas class="game-canvas" id="gameCanvas" tabindex="0" role="img" aria-label="Horizon Read drill area"></canvas>
+        <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+        <div class="stage-actions">
+          <button class="btn btn-primary" id="btnLock">lock it in</button>
+        </div>
+      </div>
+
+      <div class="game-controls">
+        <button class="btn btn-primary" id="btnRound">new round <span aria-hidden="true">↻</span></button>
+        <button class="btn" id="btnHow" aria-expanded="false" aria-controls="howTo">how to play</button>
+      </div>
+      <div class="howto" id="howTo" hidden>
+        <p class="howto-cmd" aria-hidden="true"><span class="prompt">$</span> man horizon-read</p>
+        <p>The horizon is hidden. Drag the line to the camera's eye level and lock it in — five scenes per round, closer guesses score higher.</p>
+        <p>Read the cues: box tops show only below eye level, undersides only above, and receding rows aim straight at it.</p>
+        <p>Studio tip: things at your eye level show you neither their top nor their underside — hunt for that flip.</p>
+      </div>
+
+      <noscript><p class="hint">This drill needs JavaScript — nothing else, no trackers, no accounts.</p></noscript>
+    </div>
+  </div>
+</main>
+
+<footer class="footer">
+  <nav class="footnav" aria-label="Site links">
+    <a href="https://artdaily.sadeali.com/">More drills</a>
+    <span aria-hidden="true">·</span>
+    <a href="https://sadeali.com/">More experiments</a>
+    <span aria-hidden="true">·</span>
+    <a href="https://sadeali.com/support/">Support <span class="heart-ink" aria-hidden="true">♥</span></a>
+    <span aria-hidden="true">·</span>
+    <a href="https://github.com/SadeAli" rel="me noopener">GitHub</a>
+    <span id="supportLinks"></span>
+  </nav>
+  <p class="fineprint"><span aria-hidden="true"># </span>© SadeAli · free · no ads · no tracking</p>
+</footer>
+
+<script src="js/artdaily-sdk.js"></script>
+<script src="js/support-config.js"></script>
+<script src="js/main.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>
