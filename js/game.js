@@ -218,7 +218,12 @@
     { posts: true,  boxKinds: ['above', 'below', 'span'], figures: 0 },
     { posts: false, boxKinds: ['above', 'below', 'span', 'below'], figures: 2 },
     { posts: false, boxKinds: ['above', 'below', 'span'], figures: 0 },
-    { posts: false, boxKinds: ['above', 'below'], figures: 0 },
+    /* Scene 5 used to leave only the loosest cue in the set (which way
+       the box faces point), which brackets the answer over a wide span
+       instead of pinning it — so a round of confident play could end on
+       a guess. It keeps one walker: still the hardest scene, but now a
+       hard one rather than an under-determined one. */
+    { posts: false, boxKinds: ['above', 'below'], figures: 1 },
   ];
 
   function planFor(idx) { return SCENE_PLANS[clamp(idx, 0, SCENE_PLANS.length - 1)]; }
@@ -301,9 +306,11 @@
      0.5 can only clear a "far enough from the answer" filter when the
      eye is outside 0.37..0.63, quietly ruling out most of the range. */
   function startGuess(eye) {
-    var pick = Math.random() < 0.5 ? 0.1 : 0.9;
+    /* 0.10 / 0.90 parked the line hard against the canvas edge, where the
+       grab knob at W-28 can sit half under the border on a narrow sheet. */
+    var pick = Math.random() < 0.5 ? 0.14 : 0.86;
     /* if the eye range is ever widened, keep the start off the answer */
-    return Math.abs(pick - eye) > 0.13 ? pick : (eye > 0.5 ? 0.1 : 0.9);
+    return Math.abs(pick - eye) > 0.13 ? pick : (eye > 0.5 ? 0.14 : 0.86);
   }
 
   /* ---- round state ---- */
@@ -408,7 +415,9 @@
 
   function missPhrase() {
     var dy = currentMiss();
-    return 'off by ' + dy + 'px (' + pctText(dy, H) + ' of frame) — scored ' + lastScore + '.';
+    /* Lead with the share of the frame: pixels are device-relative and
+       mean nothing across sessions or between a phone and a desktop. */
+    return 'off by ' + pctText(dy, H) + ' of the frame (' + dy + 'px) — scored ' + lastScore + '.';
   }
 
   function refreshHint() {
@@ -634,10 +643,13 @@
     var vp = [scene.vpx * W, eyeY];
     var i, b;
 
-    /* cue lines: every receding edge extended to the vanishing point */
+    /* Cue lines: every edge that runs away from you, extended to the
+       vanishing point. On a busy scene that is 18+ rays at once and the
+       single ringed cue drowns in its own correct spiderweb — so they sit
+       well back and let drawCueHighlight carry the lesson. */
     ctx.strokeStyle = c.accent;
     ctx.lineWidth = 1;
-    ctx.globalAlpha = 0.45;
+    ctx.globalAlpha = 0.2;
     ctx.setLineDash([4, 4]);
     for (i = 0; i < scene.boxes.length; i++) {
       b = scene.boxes[i];
@@ -803,8 +815,12 @@
     setGuessPx(dragLineY + d * dragGain(d));
   }
 
+  var lastPenAt = 0;
   canvas.addEventListener('pointerdown', function (ev) {
     ev.preventDefault();
+    /* palm rejection: a pen always beats a palm that landed first */
+    if (ev.pointerType === 'pen') lastPenAt = Date.now();
+    else if (ev.pointerType === 'touch' && Date.now() - lastPenAt < 500) return;
     if (phase === 'aim') {
       if (dragId !== null) return; /* first finger keeps the line */
       dragId = ev.pointerId;

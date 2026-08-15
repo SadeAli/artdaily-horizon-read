@@ -33,3 +33,25 @@ Enter to lock in and advance.
 Run it: any static server, e.g. `python3 -m http.server 8080` — no build,
 no deps. Part of [Art Daily](https://artdaily.sadeali.com/) ·
 [sadeali.com](https://sadeali.com/).
+
+## What changed in the input-fairness pass
+
+The last scene keeps one walker, so a round of confident play can no
+longer end on an under-determined guess. The miss leads with the share of
+the frame rather than pixels, the reveal's non-decisive rays are dimmed
+so the ringed cue is not lost in its own correct spiderweb, and the line
+starts a little further from the canvas edge so the grab knob is never
+clipped.
+
+## Input fairness
+
+Scores are only ever compared against your own history, so the drill
+eases its tolerances for the hardware in your hand and says which one it
+eased for (the "scoring for…" chip in the HUD). A pen keeps the strict
+reference; a mouse or trackpad, which pivots at the wrist and cannot
+creep, gets roughly double the room; a finger sits between. Start and
+grab zones move the other way — a screenless tablet needs the *biggest*
+targets, because the hand is out of sight. Relative tolerances carry an
+absolute pixel floor so a phone is never held to a stricter standard
+than a desktop for the same drill.
+
