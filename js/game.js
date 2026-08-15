@@ -59,11 +59,17 @@
     return 100 * clamp(1 - dy / (0.14 * height), 0, 1);
   }
 
-  /* Round score = mean of the five scene scores. */
+  /* Round score = mean of the five scene scores. sceneScore can only hand
+     this finite values, but a mean that can return NaN is one refactor
+     away from writing the literal text "NaN" into the HUD and into the
+     permanent personal best, so it refuses to. */
   function roundScore(sceneScores) {
     if (!sceneScores.length) return 0;
-    var sum = 0;
-    for (var i = 0; i < sceneScores.length; i++) sum += sceneScores[i];
+    var sum = 0, v;
+    for (var i = 0; i < sceneScores.length; i++) {
+      v = sceneScores[i];
+      sum += (typeof v === 'number' && isFinite(v)) ? v : 0;
+    }
     return sum / sceneScores.length;
   }
 
@@ -88,9 +94,15 @@
     var z = k * step;
     var den = z + depth;
     /* a zero/negative-depth camera is not a scene — collapse the row
-       onto the near post rather than emitting NaN into the drawing. */
-    if (!(den > 0)) return 0;
-    return z / den;
+       onto the near post rather than emitting NaN into the drawing.
+       Guarding `den` alone was not enough: a negative depth small enough
+       to leave den positive (step .7, k 3, depth −2) returned t = 21, i.e.
+       a post placed twenty vanishing-points past the horizon and far off
+       the sheet. A post is always BETWEEN the near one and the VP, so the
+       honest range is [0, 1). */
+    if (!(den > 0) || !(depth > 0) || !(z >= 0)) return 0;
+    var t = z / den;
+    return isFinite(t) ? Math.max(0, Math.min(0.999, t)) : 0;
   }
 
   function postTs(count, step, depth) {
@@ -409,9 +421,15 @@
     return scene ? CUE_TIPS[decisiveCue(scene).kind] : '';
   }
 
+  /* "eye level" is the one term the whole drill turns on, and the only
+     place it was defined was inside "how to play" — which a beginner opens
+     after the drill has already confused them, not before. Gloss it on the
+     opening scene, where the word is first used, then get out of the way. */
   function aimHint() {
     return 'scene ' + (sceneIdx + 1) + ' of ' + SCENES_PER_ROUND +
-      ' — drag the line up or down onto the hidden eye level, then lock it in. ' + cueTip();
+      ' — drag the line up or down onto the hidden eye level' +
+      (sceneIdx === 0 ? ' (the height the camera was at — a flat line straight across the picture)' : '') +
+      ', then lock it in. ' + cueTip();
   }
 
   function missPhrase() {
