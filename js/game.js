@@ -600,7 +600,7 @@
     var c = inks();
     ctx.clearRect(0, 0, W, H);
     if (phase === 'idle' || !scene) return;
-    drawScene(c);
+    drawStill(c);
     if (phase === 'aim') {
       drawGuess(c, false);
     } else {
@@ -635,6 +635,60 @@
     if (scene.posts) drawPosts(c, vp);
     for (i = 0; i < scene.boxes.length; i++) drawBox(c, scene.boxes[i], vp);
     for (i = 0; i < scene.figures.length; i++) drawFigure(c, scene.figures[i]);
+  }
+
+  /* ---- THE SCENE IS A STILL LIFE ----
+     Boxes, posts and walkers do not move while the line is under the finger:
+     they are a function of the scene, the fitted sheet and the theme, and of
+     nothing else. Measured, they were 142 of the 157 canvas calls in every
+     frame of every drag — four boxes with three shaded faces each, six
+     perspective-scaled posts, the figures — all pixel-identical to the frame
+     before, while the part that actually MOVES is one line and a knob.
+     So paint them once onto an offscreen sheet and blit it. The cache keys
+     itself on the scene object, the fitted width AND height (this drill's
+     height tracks the viewport, not just the width), the dpr and the ink
+     object — inks() hands back a NEW object the moment data-theme changes —
+     so a new scene, a resize, a dpr change and a theme flip each invalidate
+     it by themselves, and onTheme still repaints in the new colours. With no
+     offscreen sheet available the old direct path is still right there. */
+  var still = null, stillCtx = null;
+  var stillScene = null, stillW = 0, stillH = 0, stillDpr = 0, stillInks = null;
+
+  function drawStill(c) {
+    if (!(still && stillScene === scene && stillW === W && stillH === H &&
+          stillDpr === fitDpr && stillInks === c)) {
+      if (!still) {
+        try {
+          still = document.createElement('canvas');
+          stillCtx = still.getContext('2d');
+        } catch (e) { stillCtx = null; }
+        if (!stillCtx) still = null;
+      }
+      var dpr = fitDpr || 1;
+      var pw = Math.round(W * dpr), ph = Math.round(H * dpr);
+      /* a zero-sized offscreen sheet is not a drawable image — drawImage
+         throws on one, and a throw inside draw() takes the drill with it */
+      if (!still || !(pw > 0) || !(ph > 0)) { drawScene(c); return; }
+      still.width = pw;                     /* also clears the backing store */
+      still.height = ph;
+      /* every painter draws into `ctx` by name, so lend it to the offscreen
+         sheet for the duration — synchronously, so nothing observes the swap.
+         The `finally` is what makes the loan safe: a painter that threw with
+         the loan outstanding would leave `ctx` pointing at the offscreen sheet
+         for the rest of the session, and the drill would go on painting
+         perfectly into a canvas nobody can see. */
+      var sheet = ctx;
+      try {
+        ctx = stillCtx;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        drawScene(c);
+      } finally {
+        ctx = sheet;
+      }
+      stillScene = scene; stillW = W; stillH = H; stillDpr = fitDpr; stillInks = c;
+    }
+    ctx.globalAlpha = 1;
+    ctx.drawImage(still, 0, 0, W, H);
   }
 
   function drawBox(c, b, vp) {
@@ -914,8 +968,19 @@
      The sheet cannot move under a live drag without a scroll or a resize,
      and the hint line above it only re-wraps between scenes, so measure
      once per gesture and drop the measurement on scroll or resize. */
-  var canvasRect = null;
-  function dropRect() { canvasRect = null; }
+  /* THE GRAB ORIGIN IS MEASURED AGAINST THAT RECT TOO. dragTo moves the line
+     by (this sample − the last one), and both are canvas-local — so the
+     moment the sheet slides under a live drag, the first sample after it is
+     read against a new origin and differs from the stored one by the whole
+     shift, not by anything the hand did. That bogus delta is big enough to
+     clear the fine-gain threshold, so it travels at FULL gain: a hint line
+     re-wrapping on a phone resize warps the guess ~20px — 7% of a short
+     sheet, most of a scene's score — in one frame, with the finger still.
+     So dropping the rect also marks the grab stale, and the next sample is
+     spent re-anchoring instead of moving. One sample is 4–16ms; the warp was
+     the whole scene. */
+  var canvasRect = null, dragStale = false;
+  function dropRect() { canvasRect = null; dragStale = true; }
   window.addEventListener('scroll', dropRect, true);
 
   function localY(ev) {
@@ -940,13 +1005,23 @@
     var lineY = guessF * H;
     dragPointerY = py;
     dragT = (typeof ev.timeStamp === 'number' && isFinite(ev.timeStamp)) ? ev.timeStamp : 0;
+    dragStale = false;   /* everything the drag needs was just measured */
     setGuessPx(Math.abs(py - lineY) > GRAB_PX ? py : lineY);
   }
 
   function dragTo(ev) {
     var py = localY(ev);
-    var d = py - dragPointerY;
     var now = (typeof ev.timeStamp === 'number' && isFinite(ev.timeStamp)) ? ev.timeStamp : dragT + DT_FALLBACK;
+    if (dragStale) {
+      /* the sheet moved under the hand: re-anchor to where things are now
+         and move nothing this frame */
+      dragStale = false;
+      dragPointerY = py;
+      dragT = now;
+      dragLineY = guessF * H;
+      return;
+    }
+    var d = py - dragPointerY;
     var dt = now - dragT;
     dragPointerY = py;
     dragT = now;
