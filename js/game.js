@@ -422,7 +422,16 @@
     advanceTimer = setTimeout(function () {
       if (phase !== 'reveal' && phase !== 'done') return;
       btnLock.disabled = false;
-      if (hadFocus && btnLock.focus) btnLock.focus();
+      /* …but only if disabling the button is still what is holding the
+         focus. Locking in with the button, then reaching for "how to play"
+         or "new round" with Tab, is a reflex — and it fits comfortably
+         inside 420ms. Handing focus back unconditionally yanked the ring
+         off whatever the player had just moved to, so their next keystroke
+         went somewhere they were no longer looking. Disabling a focused
+         control drops focus to <body>, so that is the one state worth
+         repairing; anything else is a place the player chose. */
+      var here = document.activeElement;
+      if (hadFocus && btnLock.focus && (!here || here === document.body)) btnLock.focus();
     }, ADVANCE_MS);
   }
 
