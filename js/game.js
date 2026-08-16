@@ -173,6 +173,19 @@
     return (p < 9.95 ? p.toFixed(1) : String(Math.round(p))) + '%';
   }
 
+  /* WHICH WAY the line missed. The reveal's sentence was three ways of
+     saying the same magnitude — "off by 3.2% of the frame (12px) —
+     scored 77" — and a magnitude is not something a beginner can act on
+     next scene. "too high" is. Screen y grows downward, so a guess above
+     the true line is a negative delta. Pure; rounds first for the same
+     reason pixelError does, so a 1px keyboard nudge can reach "dead on"
+     rather than being told it is off by nothing. */
+  function missWord(guessY, trueY) {
+    var d = Math.round(guessY) - Math.round(trueY);
+    if (!isFinite(d) || d === 0) return 'dead on';
+    return d < 0 ? 'too high' : 'too low';
+  }
+
   /* The tightest box the line cuts through — it brackets the answer
      from both sides, so it is the cue worth naming. */
   function straddleIndex(boxes, eye) {
@@ -500,9 +513,14 @@
 
   function missPhrase() {
     var dy = currentMiss();
-    /* Lead with the share of the frame: pixels are device-relative and
-       mean nothing across sessions or between a phone and a desktop. */
-    return 'off by ' + pctText(dy, H) + ' of the frame (' + dy + 'px) — scored ' + lastScore + '.';
+    var way = scene ? missWord(guessF * H, scene.eye * H) : 'dead on';
+    if (way === 'dead on') return 'dead on the eye level — scored ' + lastScore + '.';
+    /* Direction first, because it is the only part of this sentence that
+       changes what you do next; then the share of the frame, because
+       pixels are device-relative and mean nothing across sessions or
+       between a phone and a desktop. */
+    return 'your line sat ' + way + ' — off by ' + pctText(dy, H) +
+      ' of the frame (' + dy + 'px), scored ' + lastScore + '.';
   }
 
   function refreshHint() {
@@ -520,6 +538,11 @@
     var s = sceneScore(guessF * H, scene.eye * H, H);
     lastScore = Math.round(s);
     sceneScores.push(s);
+    /* Running mean, so the HUD's "score" field is alive from scene 1
+       rather than reading "–" until the round ends. The pips carry the
+       per-scene detail; this is the one number that compares with the
+       "best" sitting next to it. */
+    hudScore.textContent = String(Math.round(roundScore(sceneScores)));
     phase = (sceneIdx + 1 < SCENES_PER_ROUND) ? 'reveal' : 'done';
     btnLock.textContent = phase === 'reveal' ? 'next scene →' : 'new round ↻';
     armAdvance();
